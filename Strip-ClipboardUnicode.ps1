@@ -1,62 +1,67 @@
 <#
 .SYNOPSIS
-    Removes non-printing Unicode from clipboard text.
-
-.DESCRIPTION
-    By default strips GeneralCategory == C (Control, Format, Surrogate,
-    PrivateUse, Unassigned).  Use -KeepCf to retain Cf.  Histogram + optional
-    notifications + optional Application event-log entry.
+    Cleans clipboard text: removes non-printing Unicode, converts NBSPs.
 
 .PARAMETER KeepCf
     Preserve 'Format' (Cf) characters such as U+200D ZERO WIDTH JOINER.
 
+.PARAMETER KeepNBSP
+    Preserve U+00A0 / U+202F; otherwise they are converted to ASCII space.
+
 .PARAMETER NoBeep
-    Suppress [console]::Beep and the Exclamation system sound.
+    Suppress Beep and the Exclamation system sound.
 
 .PARAMETER NoToast
-    Suppress BurntToast/Action-Center notification.
+    Suppress toast notification.
 
 .PARAMETER Log
-    Write an Application event (ID 63301).  First use registers the
-    ClipboardUnicodeScrubber event source (requires admin).
+    Write an Application event-log entry (ID 63301).
 
 .NOTES
+    Version : 1.5.0  (2025-05-17)
     Author  : DragosTech internal tooling
-    Version : 1.3.0  (2025-05-17)
     Requires: Windows PowerShell ≥ 5.1
 #>
 
 [CmdletBinding()]
 param(
     [switch]$KeepCf,
+    [switch]$KeepNBSP,
     [switch]$NoBeep,
     [switch]$NoToast,
     [switch]$Log
 )
 
-# --- Acquire clipboard verbatim --------------------------------------------
+# 1 Acquire clipboard --------------------------------------------------------
 try   { $raw = Get-Clipboard -Raw -ErrorAction Stop }
-catch { Write-Warning 'Clipboard empty or non-text'; exit 1 }
+catch { Write-Warning 'Clipboard empty or not text'; exit 1 }
 
-# --- Build list of categories to purge --------------------------------------
-$kill = @(
-    'Control','Surrogate','PrivateUse','OtherNotAssigned'
-    if (-not $KeepCf) { 'Format' }
-)
+# 2 Categories to purge ------------------------------------------------------
+$kill = @('Control','Surrogate','PrivateUse','OtherNotAssigned')
+if (-not $KeepCf) { $kill += 'Format' }
 
-# --- Histogram & scrubbing --------------------------------------------------
+# 3 Build regex to remove (keeps CR/LF) -------------------------------------
+$patternRemove = '[\p{C}&&[^\r\n]]'   # category C minus CR/LF
+
+# 4 Convert NBSPs unless user asked to keep ---------------------------------
+$intermediate = if ($KeepNBSP) { $raw }
+                else { $raw -replace '[\u00A0\u202F]', ' ' }
+
+# 5 Histogram & final scrub --------------------------------------------------
 $hist = @{}
-foreach ($c in $raw.ToCharArray()) {
+foreach ($c in $intermediate.ToCharArray()) {
     $cat = [CharUnicodeInfo]::GetUnicodeCategory($c)
     if ($kill -contains $cat) { $hist[$cat] = 1 + ($hist[$cat] | ?? 0) }
 }
-$regexClass = ($kill | ForEach-Object { '\p{' + $_[0] + '}' }) -join '|'
-$clean      = [regex]::Replace($raw, "[$regexClass]", '')
+$clean = [regex]::Replace($intermediate, $patternRemove, '')
 Set-Clipboard -Value $clean
 
-# --- Diagnostics ------------------------------------------------------------
+# 6 Diagnostics --------------------------------------------------------------
 $removed = $raw.Length - $clean.Length
-"{0} → {1} chars  |  stripped: {2}" -f $raw.Length,$clean.Length,$removed
+"{0} -> {1} chars  |  stripped: {2}" -f $raw.Length,$clean.Length,$removed
+if ($raw -ne $intermediate) {
+    'NBSPs normalised → space'
+}
 if ($hist.Count) {
     'Category breakdown:'
     $hist.GetEnumerator() |
@@ -64,8 +69,8 @@ if ($hist.Count) {
         ForEach-Object { '  {0,-12} {1,6}' -f $_.Key,$_.Value }
 }
 
-# --- Notifications ----------------------------------------------------------
-if ($removed) {
+# 7 Notifications ------------------------------------------------------------
+if ($removed -or ($raw -ne $intermediate)) {
     if (-not $NoBeep) {
         try { [console]::Beep(1000,180) } catch {}
         try {
@@ -73,28 +78,25 @@ if ($removed) {
             [System.Media.SystemSounds]::Exclamation.Play()
         } catch {}
     }
-
     if (-not $NoToast) {
         try {
             if (-not (Get-Module BurntToast)) {
                 Import-Module BurntToast -ErrorAction Stop
             }
-            New-BurntToastNotification `
-                -Text 'Clipboard scrubbed', "$removed non-printing char(s) removed"
+            $msg = "{0} chars removed; NBSP normalised: {1}" -f `
+                   $removed, (![bool]$KeepNBSP)
+            New-BurntToastNotification -Text 'Clipboard scrubbed', $msg
         } catch {}
     }
 }
 
-# --- Event-log (optional) ---------------------------------------------------
-if ($Log -and $removed) {
+# 8 Event log ----------------------------------------------------------------
+if ($Log -and ($removed -or ($raw -ne $intermediate))) {
     $source = 'ClipboardUnicodeScrubber'
-    $msg    = "$removed non-printing characters removed from clipboard. " +
-              "Categories: $($hist.Keys -join ', ')"
-
+    $msg    = "$removed chars removed. NBSP normalised: $(![bool]$KeepNBSP)."
     try {
         if (-not [System.Diagnostics.EventLog]::SourceExists($source)) {
-            # Requires admin the first time
-            New-EventLog -LogName Application -Source $source
+            New-EventLog -LogName Application -Source $source   # needs admin once
         }
         Write-EventLog -LogName Application -Source $source `
             -EventId 63301 -EntryType Information -Message $msg
