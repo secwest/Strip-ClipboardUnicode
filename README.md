@@ -59,8 +59,7 @@ Using **`-Log`** the first time needs admin rights (adds an event-log source).
 2. Target (one line):
 
     ```
-    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass ^
-        -File "C:\Tools\Strip-ClipboardUnicode.ps1"
+    powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "C:\Tools\Strip-ClipboardUnicode.ps1"
     ```
 
 3. Name it **Strip Unicode**.  
