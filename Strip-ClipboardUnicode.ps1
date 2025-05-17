@@ -1,68 +1,56 @@
 <#
 .SYNOPSIS
-    Deletes non-printing Unicode (GeneralCategory=C) from clipboard text.
+    Removes non-printing Unicode from clipboard text.
 
 .DESCRIPTION
-    Cc, Cf, Cs, Co, Cn categories are stripped in a single regex pass.
-    A frequency histogram is emitted; if any characters were removed,
-    the script plays a beep, fires the system Exclamation sound,
-    and sends a toast notification when BurntToast is present.
+    Strips general category C: Control, Format, Surrogate, PrivateUse, Unassigned.
+    Prints a histogram of what was removed.
+    On removal, beeps, plays the system Exclamation sound, and sends a toast if
+    BurntToast is available.
 
 .NOTES
-    Author:      DragosTech internal tooling team
-    Requires:    Windows PowerShell ≥ 5.1 or PowerShell 7.x on Windows
+    Requires Windows PowerShell ≥ 5.1
     Last update: 2025-05-17
 #>
 
-[CmdletBinding()]
-param()
+[CmdletBinding()] param()
 
-# -------------- acquire clipboard (verbatim) -----------------
-try {
-    $raw = Get-Clipboard -Raw -ErrorAction Stop
-} catch {
-    Write-Warning "Clipboard is empty or not text."
-    exit 1
-}
+# --- Clipboard acquisition --------------------------------------------------
+try   { $raw = Get-Clipboard -Raw -ErrorAction Stop }
+catch { Write-Warning 'Clipboard empty or not text'; exit 1 }
 
-# -------------- histogram + strip ----------------------------
-$histo = @{}
+# --- Histogram + strip ------------------------------------------------------
+$hist = @{}
 foreach ($c in $raw.ToCharArray()) {
     $cat = [CharUnicodeInfo]::GetUnicodeCategory($c)
     if ($cat -match '^(Control|Format|Surrogate|PrivateUse|OtherNotAssigned)$') {
-        $histo[$cat] = 1 + ($histo[$cat] | ?? 0)
+        $hist[$cat] = 1 + ($hist[$cat] | ?? 0)
     }
 }
 $clean = [regex]::Replace($raw, '[\p{C}]', '')
 Set-Clipboard -Value $clean
 
-# -------------- diagnostics ----------------------------------
+# --- Diagnostics ------------------------------------------------------------
 $removed = $raw.Length - $clean.Length
 "{0} → {1} chars  |  stripped: {2}" -f $raw.Length, $clean.Length, $removed
-if ($histo.Count) {
+if ($hist.Count) {
     'Category breakdown:'
-    $histo.GetEnumerator() |
-        Sort-Object Name |
+    $hist.GetEnumerator() | Sort-Object Name |
         ForEach-Object { '  {0,-12} {1,6}' -f $_.Key, $_.Value }
 }
 
-# -------------- notifications --------------------------------
+# --- Notifications ----------------------------------------------------------
 if ($removed) {
-    # (1) pure console beep — survives most terminals/RDP
-    try { [console]::Beep(1000, 180) } catch {}
-
-    # (2) system theme sound
+    try { [console]::Beep(1000,180) } catch {}
     try {
         Add-Type -AssemblyName System.Windows.Forms
         [System.Media.SystemSounds]::Exclamation.Play()
     } catch {}
-
-    # (3) toast, if module present
     try {
         if (-not (Get-Module BurntToast)) {
             Import-Module BurntToast -ErrorAction Stop
         }
         New-BurntToastNotification `
-            -Text "Clipboard scrubbed", "$removed non-printing char(s) removed"
+            -Text 'Clipboard scrubbed', "$removed non-printing char(s) removed"
     } catch {}
 }
