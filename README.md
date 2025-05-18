@@ -1,7 +1,7 @@
 # Strip-ClipboardUnicode
 Deletes non-printing Unicode (GeneralCategory = C) from clipboard text.
 
-# Clipboard Unicode Scrubber for Windows  
+# Clipboard Unicode Scrubber
 *A hot-keyed PowerShell utility that normalises or removes invisible Unicode glyphs*
 
 Highlights — **v 1.5.3**
